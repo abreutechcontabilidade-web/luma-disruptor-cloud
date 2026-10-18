@@ -19,40 +19,32 @@ LLM_POOL = ["deepseek/deepseek-chat", "anthropic/claude-3.5-sonnet"]
 
 class BanditRouter:
     def __init__(self):
-        # Adicionado o braço VIGIA
         self.brains = {
             "QUERY": [1.0, 1.0], "ACTION": [1.0, 1.0], 
             "MEMORY": [1.0, 1.0], "SYSTEM": [1.0, 1.0],
             "AUDIT": [1.0, 1.0], "REFACTOR": [1.0, 1.0],
-            "DEPLOY": [1.0, 1.0], "DELEGATE": [1.0, 1.0],
-            "VIGIA": [1.0, 1.0] # NOVO BRAÇO
+            "DEPLOY": [1.0, 1.0], "DELEGATE": [1.0, 1.0], "VIGIA": [1.0, 1.0]
         }
     
     def choose_intent(self, text):
         norm = unicodedata.normalize("NFKC", text).strip().lower()
-        
-        if "vigia" in norm or "sombra" in norm or "monitorar" in norm: return "VIGIA"
-        if any(p in norm for p in ["histórico", "ledger", "zbit", "memória"]): return "MEMORY"
-        if any(p in norm for p in ["auditar", "testar", "bancada", "red team"]): return "AUDIT"
-        if any(p in norm for p in ["deploy", "publicar", "render"]): return "DEPLOY"
+        if "vigia" in norm or "sombra" in norm: return "VIGIA"
+        if any(p in norm for p in ["histórico", "ledger", "memória"]): return "MEMORY"
+        if any(p in norm for p in ["auditar", "testar", "bancada"]): return "AUDIT"
+        if any(p in norm for p in ["deploy", "publicar"]): return "DEPLOY"
         if any(p in norm for p in ["limpar", "reiniciar", "versão"]): return "SYSTEM"
         
-        melhor_braco = "QUERY"
-        maior_amostra = -1.0
+        melhor_braco, maior_amostra = "QUERY", -1.0
         for intent, (alpha, beta) in self.brains.items():
             sample = random.betavariate(alpha, beta)
             if sample > maior_amostra:
-                maior_amostra = sample
-                melhor_braco = intent
+                maior_amostra, melhor_braco = sample, intent
         return melhor_braco
 
     def feedback(self, intent, reward):
-        if intent in self.brains:
-            self.brains[intent][0 if reward else 1] += 1.0
+        if intent in self.brains: self.brains[intent][0 if reward else 1] += 1.0
 
 bandit_router = BanditRouter()
-
-# Simulação de contador de ameaças bloqueadas (VIGIA)
 threats_blocked = 0
 
 class WebCISOGate:
@@ -67,7 +59,7 @@ class WebCISOGate:
                 return False, f"VETO CISO-WEB: Padrao hostil ({pat})"
         return True, "OK"
 
-estado_global = {"status": "idle", "tipo": "", "resultado": "", "preview_html": "", "sucesso": False, "intent_chosen": ""}
+estado_global = {"status": "idle", "tipo": "", "resultado": "", "preview_html": "", "sucesso": False}
 
 def chamar_llm(prompt):
     if not OPENROUTER_API_KEY: return "Aviso: API Key nao configurada."
@@ -77,51 +69,44 @@ def chamar_llm(prompt):
         data = {"model": modelo, "messages": [{"role": "user", "content": prompt}]}
         try:
             req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers=headers, method="POST")
-            with urllib.request.urlopen(req, timeout=15) as response:
+            with urllib.request.urlopen(req, timeout=20) as response:
                 res_data = json.loads(response.read().decode('utf-8'))
-                if 'choices' in res_data:
-                    return res_data['choices'][0]['message']['content']
-        except Exception:
-            continue
+                if 'choices' in res_data: return res_data['choices'][0]['message']['content']
+        except Exception: continue
     return "Erro: LLMs offline."
 
 def worker_background(prompt: str, tipo: str):
     global estado_global, threats_blocked
-    estado_global["intent_chosen"] = tipo
 
     if tipo == "VIGIA":
-        # Simulando a leitura do radar VIGIA
-        estado_global = {"status": "done", "tipo": "conversa", "resultado": f"👁️ VIGIA (Shadow v0.4) ativado. Monitorizando 8 vetores de ataque. Ameaças bloqueadas até agora: {threats_blocked}.", "preview_html": "", "sucesso": True, "intent_chosen": tipo}
+        estado_global = {"status": "done", "tipo": "conversa", "resultado": f"👁️ VIGIA ativado. Ameaças bloqueadas: {threats_blocked}.", "preview_html": "", "sucesso": True}
         return
-
     if tipo == "SYSTEM":
-        estado_global = {"status": "done", "tipo": "conversa", "resultado": "Sistema v14.1 (VIGIA) operacional.", "preview_html": "", "sucesso": True, "intent_chosen": tipo}
+        estado_global = {"status": "done", "tipo": "conversa", "resultado": "Sistema v14.2 (Code Gen) operacional.", "preview_html": "", "sucesso": True}
         return
-    if tipo == "MEMORY":
-        estado_global = {"status": "done", "tipo": "conversa", "resultado": "Lendo ZBIT Ledger local...", "preview_html": "", "sucesso": True, "intent_chosen": tipo}
-        return
-    if tipo == "AUDIT":
-        estado_global = {"status": "done", "tipo": "conversa", "resultado": "Red Team ativado. Testando o Bandit...", "preview_html": "", "sucesso": True, "intent_chosen": tipo}
-        return
-    if tipo == "DEPLOY":
-        estado_global = {"status": "done", "tipo": "conversa", "resultado": "Deploy preparado para o Render.", "preview_html": "", "sucesso": True, "intent_chosen": tipo}
-        return
-
     if tipo == "QUERY":
-        sys_prompt = f"Você é o LUMA Senior Engineer. Responda em texto puro: {prompt}"
+        sys_prompt = f"Você é o LUMA. Responda de forma técnica: {prompt}"
         res = chamar_llm(sys_prompt)
-        estado_global = {"status": "done", "tipo": "conversa", "resultado": res, "preview_html": "", "sucesso": True, "intent_chosen": tipo}
+        estado_global = {"status": "done", "tipo": "conversa", "resultado": res, "preview_html": "", "sucesso": True}
     elif tipo in ["ACTION", "REFACTOR"]:
-        candidato_html = f"""<div style='padding: 12px; border: 1px solid #3b82f6; border-radius: 6px; background: #1e293b; color: #fff;'>
-  <p style='margin: 0 0 8px 0; font-weight: bold;'>Componente Sênior ({tipo})</p>
-  <button style='background: #2563eb; color: #fff; padding: 6px 12px; border-radius: 4px;'>Ação: {prompt[:30]}</button>
-</div>"""
-        ok_web, motivo_web = WebCISOGate.validar_html(candidato_html)
+        # O LLM agora gera o código real (HTML/JS para o preview)
+        sys_prompt = f"""
+        Crie o código HTML/JS completo para: {prompt}. 
+        Regras: 
+        1. Retorne APENAS o código HTML, sem markdown.
+        2. Use CSS embutido para ficar escuro e bonito.
+        3. O jogo deve ser jogável no navegador.
+        """
+        codigo_gerado = chamar_llm(sys_prompt)
+        
+        # Limpa a formatação markdown se o LLM devolver ```html ... ```
+        codigo_limpo = re.sub(r"```(?:html)?\n?|```", "", codigo_gerado).strip()
+        
+        ok_web, motivo_web = WebCISOGate.validar_html(codigo_limpo)
         if ok_web:
-            estado_global = {"status": "done", "tipo": "acao", "resultado": "Componente aprovado.", "preview_html": candidato_html, "sucesso": True, "intent_chosen": tipo}
+            estado_global = {"status": "done", "tipo": "acao", "resultado": "Código gerado e aprovado.", "preview_html": codigo_limpo, "sucesso": True}
         else:
-            estado_global = {"status": "done", "tipo": "acao", "resultado": f"Bloqueio: {motivo_web}", "preview_html": "<div style='color: #ef4444;'>Bloqueado (XSS).</div>", "sucesso": False, "intent_chosen": tipo}
-            bandit_router.feedback(tipo, False)
+            estado_global = {"status": "done", "tipo": "acao", "resultado": f"Bloqueio: {motivo_web}", "preview_html": "<div style='color: #ef4444;'>Bloqueado (CISO).</div>", "sucesso": False}
 
 class LumaHandler(http.server.BaseHTTPRequestHandler):
     def _send_cors_headers(self):
@@ -136,7 +121,7 @@ class LumaHandler(http.server.BaseHTTPRequestHandler):
         global estado_global
         if self.path == '/api/metrics':
             now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            data = {"status": "LUMA-VIGIA (v14.1)", "cortex_latency_ms": 0.77, "latency_mode": "BASELINE", "tco_3y_usd": 2783, "dvs_power_watts": "6.5 - 9.0", "utc_timestamp": now_utc}
+            data = {"status": "LUMA-VIGIA (v14.2 Code Gen)", "cortex_latency_ms": 0.77, "latency_mode": "BASELINE", "tco_3y_usd": 2783, "dvs_power_watts": "6.5 - 9.0", "utc_timestamp": now_utc}
             self.send_response(200); self.send_header('Content-type', 'application/json'); self._send_cors_headers(); self.end_headers()
             self.wfile.write(json.dumps(data).encode('utf-8'))
         elif self.path == '/api/status':
@@ -150,11 +135,10 @@ class LumaHandler(http.server.BaseHTTPRequestHandler):
             content_length = int(self.headers['Content-Length'])
             post_data = self.rfile.read(content_length)
             comando = json.loads(post_data).get("command", "")
-            
             tipo = bandit_router.choose_intent(comando)
             
             global estado_global
-            estado_global = {"status": "processing", "tipo": tipo.lower(), "resultado": "", "preview_html": "", "sucesso": False, "intent_chosen": tipo}
+            estado_global = {"status": "processing", "tipo": tipo.lower(), "resultado": "", "preview_html": "", "sucesso": False}
             
             thread = threading.Thread(target=worker_background, args=(comando, tipo))
             thread.daemon = True; thread.start()
@@ -167,6 +151,6 @@ class LumaHandler(http.server.BaseHTTPRequestHandler):
 class QuietServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
 
-print(f"[LUMA] Servidor v14.1 (VIGIA) a correr em http://{HOST}:{PORT}")
+print(f"[LUMA] Servidor v14.2 (Code Gen) a correr em http://{HOST}:{PORT}")
 with QuietServer((HOST, PORT), LumaHandler) as httpd:
     httpd.serve_forever()
