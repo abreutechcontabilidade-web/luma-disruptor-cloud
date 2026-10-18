@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: luma-disruptor
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python luma_server.py
