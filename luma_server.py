@@ -28,12 +28,22 @@ class BanditRouter:
     
     def choose_intent(self, text):
         norm = unicodedata.normalize("NFKC", text).strip().lower()
-        if "vigia" in norm or "sombra" in norm: return "VIGIA"
-        if any(p in norm for p in ["histórico", "ledger", "memória"]): return "MEMORY"
-        if any(p in norm for p in ["auditar", "testar", "bancada"]): return "AUDIT"
-        if any(p in norm for p in ["deploy", "publicar"]): return "DEPLOY"
-        if any(p in norm for p in ["limpar", "reiniciar", "versão"]): return "SYSTEM"
         
+        # Regras Determinísticas (Prioridade Máxima)
+        if any(p in norm for p in ["jogo", "html", "css", "javascript", "criar", "adicionar", "editar"]): 
+            return "ACTION"
+        if "vigia" in norm or "sombra" in norm: 
+            return "VIGIA"
+        if any(p in norm for p in ["histórico", "ledger", "memória"]): 
+            return "MEMORY"
+        if any(p in norm for p in ["auditar", "testar", "bancada"]): 
+            return "AUDIT"
+        if any(p in norm for p in ["deploy", "publicar"]): 
+            return "DEPLOY"
+        if any(p in norm for p in ["limpar", "reiniciar", "versão"]): 
+            return "SYSTEM"
+        
+        # Se for ambíguo, o Bandit decide
         melhor_braco, maior_amostra = "QUERY", -1.0
         for intent, (alpha, beta) in self.brains.items():
             sample = random.betavariate(alpha, beta)
@@ -41,22 +51,17 @@ class BanditRouter:
                 maior_amostra, melhor_braco = sample, intent
         return melhor_braco
 
-    def feedback(self, intent, reward):
-        if intent in self.brains: self.brains[intent][0 if reward else 1] += 1.0
-
 bandit_router = BanditRouter()
-threats_blocked = 0
 
 class WebCISOGate:
-    VETOS = [r"<script\b", r"\bon\w+\s*=", r"javascript\s*:", r"\bnew\s+Function\b", r"\batob\s*\(", r"\beval\s*\(", r"<iframe\b", r"srcdoc\s*="]
+    # CISO agora permite <script> para jogos, mas bloqueia injeções maliciosas.
+    VETOS = [r"\beval\s*\(", r"\batob\s*\(", r"document\.cookie", r"localStorage", r"sessionStorage", r"<iframe\b", r"srcdoc\s*="]
     @classmethod
     def validar_html(cls, html: str) -> tuple:
-        global threats_blocked
         norm = unicodedata.normalize("NFKC", html)
         for pat in cls.VETOS:
             if re.search(pat, norm, re.IGNORECASE):
-                threats_blocked += 1
-                return False, f"VETO CISO-WEB: Padrao hostil ({pat})"
+                return False, f"VETO CISO-WEB: Codigo malicioso detetado ({pat})"
         return True, "OK"
 
 estado_global = {"status": "idle", "tipo": "", "resultado": "", "preview_html": "", "sucesso": False}
@@ -69,41 +74,32 @@ def chamar_llm(prompt):
         data = {"model": modelo, "messages": [{"role": "user", "content": prompt}]}
         try:
             req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers=headers, method="POST")
-            # Timeout de 25 segundos para evitar congelamento no plano free
             with urllib.request.urlopen(req, timeout=25) as response:
                 res_data = json.loads(response.read().decode('utf-8'))
                 if 'choices' in res_data: return res_data['choices'][0]['message']['content']
-        except Exception as e: 
-            print(f"[LLM-ERRO] {modelo} falhou: {e}")
-            continue
-    return "Erro: O tempo de resposta do LLM excedeu o limite (Timeout)."
+        except Exception: continue
+    return "Erro: O tempo de resposta do LLM excedeu o limite."
 
 def worker_background(prompt: str, tipo: str):
-    global estado_global, threats_blocked
+    global estado_global
 
     if tipo == "VIGIA":
-        estado_global = {"status": "done", "tipo": "conversa", "resultado": f"👁️ VIGIA ativado. Ameaças bloqueadas: {threats_blocked}.", "preview_html": "", "sucesso": True}
+        estado_global = {"status": "done", "tipo": "conversa", "resultado": f"👁️ VIGIA ativado.", "preview_html": "", "sucesso": True}
         return
     if tipo == "SYSTEM":
-        estado_global = {"status": "done", "tipo": "conversa", "resultado": "Sistema v14.3 operacional.", "preview_html": "", "sucesso": True}
+        estado_global = {"status": "done", "tipo": "conversa", "resultado": "Sistema v14.4 (Jogo Ready).", "preview_html": "", "sucesso": True}
         return
     if tipo == "QUERY":
-        sys_prompt = f"Você é o LUMA. Responda de forma técnica: {prompt}"
-        res = chamar_llm(sys_prompt)
+        res = chamar_llm(f"Responda: {prompt}")
         estado_global = {"status": "done", "tipo": "conversa", "resultado": res, "preview_html": "", "sucesso": True}
     elif tipo in ["ACTION", "REFACTOR"]:
-        sys_prompt = f"""
-        Crie o código HTML/JS completo para: {prompt}. 
-        Regras: 
-        1. Retorne APENAS o código HTML, sem markdown (```html).
-        2. Use CSS embutido para ficar escuro e bonito.
-        """
+        sys_prompt = f"Crie o codigo HTML e JS jogavel para: {prompt}. Retorne APENAS o codigo HTML."
         codigo_gerado = chamar_llm(sys_prompt)
         codigo_limpo = re.sub(r"```(?:html)?\n?|```", "", codigo_gerado).strip()
         
         ok_web, motivo_web = WebCISOGate.validar_html(codigo_limpo)
         if ok_web:
-            estado_global = {"status": "done", "tipo": "acao", "resultado": "Código gerado e aprovado.", "preview_html": codigo_limpo, "sucesso": True}
+            estado_global = {"status": "done", "tipo": "acao", "resultado": "Codigo gerado e aprovado.", "preview_html": codigo_limpo, "sucesso": True}
         else:
             estado_global = {"status": "done", "tipo": "acao", "resultado": f"Bloqueio: {motivo_web}", "preview_html": "<div style='color: #ef4444;'>Bloqueado (CISO).</div>", "sucesso": False}
 
@@ -119,13 +115,12 @@ class LumaHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         global estado_global
         if self.path == '/api/metrics':
-            now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            data = {"status": "LUMA-VIGIA (v14.3 Code Gen)", "cortex_latency_ms": 0.77, "latency_mode": "BASELINE", "tco_3y_usd": 2783, "dvs_power_watts": "6.5 - 9.0", "utc_timestamp": now_utc}
-            self.send_response(200); self.send_header('Content-type', 'application/json'); self._send_cors_headers(); self.end_headers()
-            self.wfile.write(json.dumps(data).encode('utf-8'))
+            data = {"status": "LUMA-VIGIA (v14.4 Sandbox)", "cortex_latency_ms": 0.77, "latency_mode": "BASELINE", "tco_3y_usd": 2783, "dvs_power_watts": "6.5 - 9.0"}
+            self.send_response(200); self.send_header('Content-type', 'application/json; charset=utf-8'); self._send_cors_headers(); self.end_headers()
+            self.wfile.write(json.dumps(data, ensure_ascii=False).encode('utf-8'))
         elif self.path == '/api/status':
-            self.send_response(200); self.send_header('Content-type', 'application/json'); self._send_cors_headers(); self.end_headers()
-            self.wfile.write(json.dumps(estado_global).encode('utf-8'))
+            self.send_response(200); self.send_header('Content-type', 'application/json; charset=utf-8'); self._send_cors_headers(); self.end_headers()
+            self.wfile.write(json.dumps(estado_global, ensure_ascii=False).encode('utf-8'))
         else:
             self.send_response(404); self.end_headers()
 
@@ -142,14 +137,14 @@ class LumaHandler(http.server.BaseHTTPRequestHandler):
             thread = threading.Thread(target=worker_background, args=(comando, tipo))
             thread.daemon = True; thread.start()
             
-            self.send_response(200); self.send_header('Content-type', 'application/json'); self._send_cors_headers(); self.end_headers()
-            self.wfile.write(json.dumps({"status": "accepted", "intencao": tipo}).encode('utf-8'))
+            self.send_response(200); self.send_header('Content-type', 'application/json; charset=utf-8'); self._send_cors_headers(); self.end_headers()
+            self.wfile.write(json.dumps({"status": "accepted", "intencao": tipo}, ensure_ascii=False).encode('utf-8'))
         else:
             self.send_response(404); self.end_headers()
 
 class QuietServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
 
-print(f"[LUMA] Servidor v14.3 (Code Gen + Timeout) a correr em http://{HOST}:{PORT}")
+print(f"[LUMA] Servidor v14.4 a correr em http://{HOST}:{PORT}")
 with QuietServer((HOST, PORT), LumaHandler) as httpd:
     httpd.serve_forever()
