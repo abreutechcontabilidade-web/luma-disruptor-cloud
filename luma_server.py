@@ -69,11 +69,14 @@ def chamar_llm(prompt):
         data = {"model": modelo, "messages": [{"role": "user", "content": prompt}]}
         try:
             req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers=headers, method="POST")
-            with urllib.request.urlopen(req, timeout=20) as response:
+            # Timeout de 25 segundos para evitar congelamento no plano free
+            with urllib.request.urlopen(req, timeout=25) as response:
                 res_data = json.loads(response.read().decode('utf-8'))
                 if 'choices' in res_data: return res_data['choices'][0]['message']['content']
-        except Exception: continue
-    return "Erro: LLMs offline."
+        except Exception as e: 
+            print(f"[LLM-ERRO] {modelo} falhou: {e}")
+            continue
+    return "Erro: O tempo de resposta do LLM excedeu o limite (Timeout)."
 
 def worker_background(prompt: str, tipo: str):
     global estado_global, threats_blocked
@@ -82,24 +85,20 @@ def worker_background(prompt: str, tipo: str):
         estado_global = {"status": "done", "tipo": "conversa", "resultado": f"👁️ VIGIA ativado. Ameaças bloqueadas: {threats_blocked}.", "preview_html": "", "sucesso": True}
         return
     if tipo == "SYSTEM":
-        estado_global = {"status": "done", "tipo": "conversa", "resultado": "Sistema v14.2 (Code Gen) operacional.", "preview_html": "", "sucesso": True}
+        estado_global = {"status": "done", "tipo": "conversa", "resultado": "Sistema v14.3 operacional.", "preview_html": "", "sucesso": True}
         return
     if tipo == "QUERY":
         sys_prompt = f"Você é o LUMA. Responda de forma técnica: {prompt}"
         res = chamar_llm(sys_prompt)
         estado_global = {"status": "done", "tipo": "conversa", "resultado": res, "preview_html": "", "sucesso": True}
     elif tipo in ["ACTION", "REFACTOR"]:
-        # O LLM agora gera o código real (HTML/JS para o preview)
         sys_prompt = f"""
         Crie o código HTML/JS completo para: {prompt}. 
         Regras: 
-        1. Retorne APENAS o código HTML, sem markdown.
+        1. Retorne APENAS o código HTML, sem markdown (```html).
         2. Use CSS embutido para ficar escuro e bonito.
-        3. O jogo deve ser jogável no navegador.
         """
         codigo_gerado = chamar_llm(sys_prompt)
-        
-        # Limpa a formatação markdown se o LLM devolver ```html ... ```
         codigo_limpo = re.sub(r"```(?:html)?\n?|```", "", codigo_gerado).strip()
         
         ok_web, motivo_web = WebCISOGate.validar_html(codigo_limpo)
@@ -121,7 +120,7 @@ class LumaHandler(http.server.BaseHTTPRequestHandler):
         global estado_global
         if self.path == '/api/metrics':
             now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            data = {"status": "LUMA-VIGIA (v14.2 Code Gen)", "cortex_latency_ms": 0.77, "latency_mode": "BASELINE", "tco_3y_usd": 2783, "dvs_power_watts": "6.5 - 9.0", "utc_timestamp": now_utc}
+            data = {"status": "LUMA-VIGIA (v14.3 Code Gen)", "cortex_latency_ms": 0.77, "latency_mode": "BASELINE", "tco_3y_usd": 2783, "dvs_power_watts": "6.5 - 9.0", "utc_timestamp": now_utc}
             self.send_response(200); self.send_header('Content-type', 'application/json'); self._send_cors_headers(); self.end_headers()
             self.wfile.write(json.dumps(data).encode('utf-8'))
         elif self.path == '/api/status':
@@ -151,6 +150,6 @@ class LumaHandler(http.server.BaseHTTPRequestHandler):
 class QuietServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
 
-print(f"[LUMA] Servidor v14.2 (Code Gen) a correr em http://{HOST}:{PORT}")
+print(f"[LUMA] Servidor v14.3 (Code Gen + Timeout) a correr em http://{HOST}:{PORT}")
 with QuietServer((HOST, PORT), LumaHandler) as httpd:
     httpd.serve_forever()
