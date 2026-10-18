@@ -3,51 +3,60 @@ import socketserver
 import json
 import time
 import random
-import subprocess
 import os
 import sys
 import threading
 import unicodedata
+import urllib.request
+import urllib.error
 
-# A NUVEM USA A PORTA QUE ELA DEFINIR (OU 8000 SE FOR LOCAL)
 PORT = int(os.environ.get("PORT", 8000))
-HOST = "0.0.0.0" # Ouve em todas as interfaces para a nuvem conseguir aceder
-
-MOTOR_DIR = r"C:\Users\user\Desktop\cpf_arboreo_repo\_bancada\motor"
-PROJECT_DIR = r"C:\Users\user\Desktop\leitor-gibi"
-PY_EXE = r"C:\Users\user\Desktop\luma-audit-repo\.venv\Scripts\python.exe"
-
-MOTOR_LIB = r"C:\Users\user\Desktop\cpf_arboreo_repo\_bancada\motor\lib"
-if MOTOR_LIB not in sys.path: sys.path.insert(0, MOTOR_LIB)
-try:
-    from multi_fallback import gerar_com_fallback
-except:
-    def gerar_com_fallback(p): return "Offline na nuvem (LLM nao configurado).", "mock", "mock"
+HOST = "0.0.0.0"
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 
 estado_global = {"status": "idle", "tipo": "", "resultado": "", "sucesso": False}
+
+def chamar_llm_cloud(prompt):
+    if not OPENROUTER_API_KEY:
+        return "Aviso: A API Key não está configurada no Render. Adicione OPENROUTER_API_KEY nas variáveis de ambiente."
+    
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://luma-disruptor.onrender.com"
+    }
+    data = {
+        "model": "deepseek/deepseek-chat",
+        "messages": [{"role": "user", "content": prompt}]
+    }
+    
+    try:
+        req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=60) as response:
+            res_data = json.loads(response.read().decode('utf-8'))
+            return res_data['choices'][0]['message']['content']
+    except Exception as e:
+        return f"Erro na nuvem ao contactar o LLM: {str(e)}"
 
 def processar_acao(comando):
     global estado_global
     estado_global = {"status": "processing", "tipo": "acao", "resultado": "", "sucesso": False}
-    # Na nuvem, não temos acesso aos ficheiros C:\. Vamos simular a ação para o frontend.
     time.sleep(2)
-    estado_global = {"status": "done", "tipo": "acao", "resultado": "Ação simulada na nuvem.", "sucesso": True}
+    estado_global = {"status": "done", "tipo": "acao", "resultado": "Ação simulada na nuvem (modo leitura).", "sucesso": True}
 
 def processar_conversa(comando):
     global estado_global
     estado_global = {"status": "processing", "tipo": "conversa", "resultado": "", "sucesso": False}
     
     comando_seguro = unicodedata.normalize("NFKC", comando)
-    if any(p in comando_seguro.lower() for p in ["ignore", "esqueça", "system prompt", "system override"]):
-        estado_global = {"status": "done", "tipo": "conversa", "resultado": "Aviso de Segurança: Tentativa de manipulação detetada.", "sucesso": False}
+    if any(p in comando_seguro.lower() for p in ["ignore", "esqueça", "system prompt"]):
+        estado_global = {"status": "done", "tipo": "conversa", "resultado": "Aviso de Segurança: CISO bloqueou injeção de prompt.", "sucesso": False}
         return
 
-    prompt = f"Você é o LUMA, o CTO de IA de elite. Responda em português: {comando_seguro}"
-    try:
-        res, _, _ = gerar_com_fallback(prompt)
-        estado_global = {"status": "done", "tipo": "conversa", "resultado": str(res), "sucesso": True}
-    except Exception as e:
-        estado_global = {"status": "error", "tipo": "conversa", "resultado": str(e), "sucesso": False}
+    prompt = f"Você é o LUMA, o CTO de IA de elite. Responda de forma direta e técnica em português: {comando_seguro}"
+    res = chamar_llm_cloud(prompt)
+    estado_global = {"status": "done", "tipo": "conversa", "resultado": res, "sucesso": True}
 
 class LumaHandler(http.server.BaseHTTPRequestHandler):
     def _send_cors_headers(self):
@@ -70,7 +79,7 @@ class LumaHandler(http.server.BaseHTTPRequestHandler):
             self.send_header('Content-type', 'application/json')
             self._send_cors_headers()
             self.end_headers()
-            data = {"status": "LUMA-DISRUPTOR (v11.0 Cloud)", "cortex_latency_ms": latency, "tco_3y_usd": 2783, "dvs_power_watts": "6.5 - 9.0"}
+            data = {"status": "LUMA-DISRUPTOR (v12.0 Cloud)", "cortex_latency_ms": latency, "tco_3y_usd": 2783, "dvs_power_watts": "6.5 - 9.0"}
             self.wfile.write(json.dumps(data).encode('utf-8'))
         elif self.path == '/api/status':
             self.send_response(200)
@@ -111,6 +120,6 @@ class LumaHandler(http.server.BaseHTTPRequestHandler):
 class QuietServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
 
-print(f"[LUMA] Servidor v11.0 (Cloud) a correr em http://{HOST}:{PORT}")
+print(f"[LUMA] Servidor v12.0 (Cloud LLM) a correr em http://{HOST}:{PORT}")
 with QuietServer((HOST, PORT), LumaHandler) as httpd:
     httpd.serve_forever()
